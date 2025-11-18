@@ -100,7 +100,7 @@ jobs:
             else:
                 print("✅ No drift detected")
         else:
-            print("ℹ️  No baseline data found, skipping drift detection")
+            print("No baseline data found, skipping drift detection")
             os.makedirs('metrics', exist_ok=True)
             with open('metrics/drift_report.json', 'w') as f:
                 json.dump({'overall_drift': False, 'note': 'First run, no baseline'}, f)
