@@ -1,14 +1,17 @@
 # MLOps Sentiment Analysis Pipeline with GCP
 
-An automated machine learning pipeline that trains a sentiment analysis model, detects data drift, and deploys to Google Cloud Storage.
+This project delivers an end-to-end MLOps workflow that automates sentiment analysis model training, evaluates performance, checks for data drift, and deploys improved models to Google Cloud Storage using GitHub Actions. It integrates modular code design, cloud infrastructure, CI/CD automation, versioning, and monitoring into a single streamlined pipeline.
+
+**Labs Implemented**
+
+This pipeline combines and simplifies key concepts from the MLOps labs—virtual environments, modular project structure, automated testing, model training, versioning, and cloud deployment. It extends these labs by replacing simple examples with a full NLP sentiment model, adding data drift detection, smart deployment (only pushing better models), and integrating GCP Cloud Storage with GitHub Actions for automated CI/CD.
 
 ## Features
 
-- ✅ Automated model training with GitHub Actions
-- ✅ Data drift detection using statistical tests
-- ✅ Model versioning and comparison
-- ✅ Automated deployment to GCS
-- ✅ Smart rollback (only deploy better models)
+- Automated model training with GitHub Actions
+- Data drift detection using statistical tests
+- Model versioning and comparison
+- Automated deployment to GCS
 
 ## Architecture
 ```
@@ -98,6 +101,6 @@ Check the following after each run:
 3. GCS bucket contents
 4. Downloaded artifacts
 
-## License
+## Where to find outputs - GCP Bucket
 
-MIT
+<img width="1537" height="507" alt="Screenshot 2025-11-17 223928" src="https://github.com/user-attachments/assets/e8e180fe-d363-4f13-b19d-5d184a08d46b" />
