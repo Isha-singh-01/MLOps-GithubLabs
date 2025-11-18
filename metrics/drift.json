@@ -1,0 +1,26 @@
+{
+    "label_drift": {
+        "chi2_statistic": 0.0,
+        "p_value": 1.0,
+        "drift_detected": false,
+        "old_distribution": {
+            "0": 300,
+            "1": 440,
+            "2": 260
+        },
+        "new_distribution": {
+            "0": 300,
+            "1": 440,
+            "2": 260
+        }
+    },
+    "text_length_drift": {
+        "ks_statistic": 0.0,
+        "p_value": 1.0,
+        "drift_detected": false,
+        "old_mean_length": 103.171,
+        "new_mean_length": 103.171
+    },
+    "overall_drift": false,
+    "timestamp": "2025-11-18T03:37:17.355043"
+}

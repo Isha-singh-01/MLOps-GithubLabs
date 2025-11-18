@@ -1,0 +1,8 @@
+{
+    "train_accuracy": 1.0,
+    "test_accuracy": 1.0,
+    "train_samples": 800,
+    "test_samples": 200,
+    "timestamp": "2025-11-18T03:37:18.407090",
+    "model_path": "models/sentiment_model.pkl"
+}
