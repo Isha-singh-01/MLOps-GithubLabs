@@ -1,0 +1,31 @@
+# Virtual Environment
+venv/
+env/
+*.pyc
+__pycache__/
+
+# Model artifacts (stored in S3)
+models/*.pkl
+models/*.joblib
+
+# Data files (too large for git)
+data/*.csv
+data/*.json
+
+# Logs
+logs/*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Credentials
+*.pem
+*.key
+config.json
+
+gcp/

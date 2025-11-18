@@ -1,0 +1,284 @@
+name: ML Training Pipeline with Drift Detection (GCP)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'data/**'
+      - 'requirements.txt'
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly on Sunday at midnight
+  workflow_dispatch:  # Manual trigger
+
+env:
+  PYTHON_VERSION: '3.10'
+  MODEL_NAME: 'sentiment_model'
+
+jobs:
+  train-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Create directories
+      run: |
+        mkdir -p data models metrics logs
+    
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+    
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+    
+    - name: Generate training data
+      run: |
+        python src/generate_data.py
+    
+    - name: Download previous artifacts from GCS (if exists)
+      run: |
+        python << EOF
+        from src.gcs_helper import GCSHelper
+        import os
+        
+        try:
+            gcs = GCSHelper('${{ secrets.GCS_BUCKET_NAME }}')
+            
+            # Download previous model and metrics
+            gcs.download_file('models/best_model.pkl', 'models/previous_model.pkl')
+            gcs.download_file('metrics/best_metrics.json', 'metrics/previous_metrics.json')
+            gcs.download_file('data/baseline_reviews.csv', 'data/baseline_reviews.csv')
+            
+            print("✅ Previous artifacts downloaded successfully")
+        except Exception as e:
+            print(f"ℹ️  No previous artifacts found (might be first run): {e}")
+        EOF
+    
+    - name: Check for data drift
+      id: drift_check
+      run: |
+        python << EOF
+        import os
+        import json
+        from src.drift_detector import DriftDetector
+        
+        drift_detected = False
+        
+        if os.path.exists('data/baseline_reviews.csv'):
+            print("🔍 Checking for data drift...")
+            detector = DriftDetector(threshold=0.05)
+            drift_detected = detector.check_drift(
+                'data/baseline_reviews.csv',
+                'data/reviews.csv'
+            )
+            detector.save_report('metrics/drift_report.json')
+            
+            if drift_detected:
+                print("⚠️  DRIFT DETECTED!")
+            else:
+                print("✅ No drift detected")
+        else:
+            print("ℹ️  No baseline data found, skipping drift detection")
+            os.makedirs('metrics', exist_ok=True)
+            with open('metrics/drift_report.json', 'w') as f:
+                json.dump({'overall_drift': False, 'note': 'First run, no baseline'}, f)
+        
+        # Set output for next steps
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            f.write(f"drift_detected={str(drift_detected).lower()}\n")
+        EOF
+    
+    - name: Train model
+      run: |
+        echo "🚀 Starting model training..."
+        python src/train_model.py
+    
+    - name: Compare with previous model
+      id: model_comparison
+      run: |
+        python << EOF
+        import json
+        import os
+        
+        print("\n📊 Comparing model performance...")
+        
+        # Load current metrics
+        with open('metrics/training_metrics.json', 'r') as f:
+            current_metrics = json.load(f)
+        
+        deploy_model = True
+        previous_metrics = {}
+        
+        # Compare with previous if exists
+        if os.path.exists('metrics/previous_metrics.json'):
+            with open('metrics/previous_metrics.json', 'r') as f:
+                previous_metrics = json.load(f)
+            
+            current_acc = current_metrics['test_accuracy']
+            previous_acc = previous_metrics['test_accuracy']
+            improvement = current_acc - previous_acc
+            
+            print(f"\n{'='*50}")
+            print(f"Current Model Accuracy:  {current_acc:.2%}")
+            print(f"Previous Model Accuracy: {previous_acc:.2%}")
+            print(f"Improvement:             {improvement:+.2%}")
+            print(f"{'='*50}\n")
+            
+            # Only deploy if new model is better or equal
+            deploy_model = current_acc >= previous_acc
+            
+            if deploy_model:
+                print("✅ New model performs better or equal - Will deploy!")
+            else:
+                print("⏸️  New model performs worse - Will NOT deploy")
+        else:
+            print("ℹ️  No previous model found, deploying current model")
+        
+        # Save comparison results
+        comparison = {
+            'current_metrics': current_metrics,
+            'previous_metrics': previous_metrics,
+            'deploy_model': deploy_model,
+            'improvement': current_metrics['test_accuracy'] - previous_metrics.get('test_accuracy', 0) if previous_metrics else 0
+        }
+        
+        with open('metrics/comparison.json', 'w') as f:
+            json.dump(comparison, f, indent=4)
+        
+        # Set output
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            f.write(f"deploy_model={str(deploy_model).lower()}\n")
+        EOF
+    
+    - name: Upload model to GCS (if better)
+      if: steps.model_comparison.outputs.deploy_model == 'true'
+      run: |
+        python << EOF
+        from src.gcs_helper import GCSHelper
+        from datetime import datetime
+        
+        print("\n📤 Uploading model to GCS...")
+        
+        gcs = GCSHelper('${{ secrets.GCS_BUCKET_NAME }}')
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # Upload current model as best model
+        gcs.upload_file('models/sentiment_model.pkl', 'models/best_model.pkl')
+        gcs.upload_file('metrics/training_metrics.json', 'metrics/best_metrics.json')
+        gcs.upload_file('data/reviews.csv', 'data/baseline_reviews.csv')
+        
+        # Archive with timestamp
+        gcs.upload_file('models/sentiment_model.pkl', f'archive/models/model_{timestamp}.pkl')
+        gcs.upload_file('metrics/training_metrics.json', f'archive/metrics/metrics_{timestamp}.json')
+        
+        # Upload drift report if exists
+        import os
+        if os.path.exists('metrics/drift_report.json'):
+            gcs.upload_file('metrics/drift_report.json', f'archive/drift/drift_{timestamp}.json')
+        
+        print(f"\n{'='*50}")
+        print(f"✅ Model uploaded successfully!")
+        print(f"📦 Bucket: gs://${{ secrets.GCS_BUCKET_NAME }}")
+        print(f"🕒 Timestamp: {timestamp}")
+        print(f"{'='*50}\n")
+        EOF
+    
+    - name: Upload artifacts to GitHub
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: model-artifacts-${{ github.run_number }}
+        path: |
+          models/*.pkl
+          metrics/*.json
+          logs/*.log
+        retention-days: 30
+    
+    - name: Generate Summary Report
+      if: always()
+      run: |
+        python << EOF
+        import json
+        import os
+        
+        print("\n" + "="*60)
+        print("📋 PIPELINE EXECUTION SUMMARY")
+        print("="*60)
+        
+        # Load metrics
+        if os.path.exists('metrics/training_metrics.json'):
+            with open('metrics/training_metrics.json', 'r') as f:
+                metrics = json.load(f)
+            
+            print(f"\n🎯 Model Performance:")
+            print(f"   Train Accuracy: {metrics['test_accuracy']:.2%}")
+            print(f"   Test Accuracy:  {metrics['train_accuracy']:.2%}")
+            print(f"   Train Samples:  {metrics['train_samples']}")
+            print(f"   Test Samples:   {metrics['test_samples']}")
+        
+        # Drift status
+        drift_status = "${{ steps.drift_check.outputs.drift_detected }}"
+        print(f"\n📊 Drift Detection:")
+        print(f"   Status: {'⚠️  DRIFT DETECTED' if drift_status == 'true' else '✅ No drift detected'}")
+        
+        # Deployment status
+        deploy_status = "${{ steps.model_comparison.outputs.deploy_model }}"
+        print(f"\n🚀 Deployment:")
+        print(f"   Status: {'✅ Model deployed to GCS' if deploy_status == 'true' else '⏸️  Model not deployed'}")
+        
+        print(f"\n🪣 GCS Bucket:")
+        print(f"   gs://${{ secrets.GCS_BUCKET_NAME }}")
+        
+        print("\n" + "="*60 + "\n")
+        EOF
+    
+    - name: Create GitHub Summary
+      if: always()
+      run: |
+        echo "## 🎯 ML Pipeline Execution Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📊 Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Drift Detected | ${{ steps.drift_check.outputs.drift_detected }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Model Deployed | ${{ steps.model_comparison.outputs.deploy_model }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| GCS Bucket | \`gs://${{ secrets.GCS_BUCKET_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -f metrics/training_metrics.json ]; then
+          echo "### 🤖 Model Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          cat metrics/training_metrics.json >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ -f metrics/comparison.json ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📈 Model Comparison" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          cat metrics/comparison.json >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        fi
